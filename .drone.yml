@@ -1,0 +1,58 @@
+kind: pipeline
+name: sdk
+type: docker
+
+volumes:
+  - name: cache
+    host:
+      path: /data/drone/cache
+  - name: target
+    host:
+      path: /data/drone/target
+
+steps:
+
+  - name: prod_build
+    image: maven:3-jdk-8
+    volumes:
+      - name: cache
+        path: /root/.m2
+      - name: target
+        path: /app/build
+    commands:
+      - version=$DRONE_TAG
+      - tag=cnsrv
+      - war=sdksrv.war
+      - echo "$version"
+      - sed -i "7s/<version>.*/<version>$version<\\/version>/" pom.xml
+      - mvn clean && mvn compile war:war -Dmaven.wagon.http.ssl.insecure=true -Dmaven.wagon.http.ssl.allowall=true
+      - mkdir -p /app/build/$tag/$version/
+      - cp target/$war /app/build/$tag/$version/$war
+      - cp changelog.txt /app/build/$tag/$version/changelog.txt
+      - cp version.html /app/build/$tag/$version/version.html
+      - md5Str=`md5sum /app/build/$tag/$version/$war | awk '{print $1}'`
+      - sed -i "s/__VERSION__/$version/g" /app/build/$tag/$version/version.html
+      - sed -i "s/__MD5__/$md5Str/g" /app/build/$tag/$version/version.html
+      - sed -i "s/__WAR__/$war/g" /app/build/$tag/$version/version.html
+      - sed -i "s/__TAG__/$tag/g" /app/build/$tag/$version/version.html
+
+
+  # 编译发布的结果进行通知
+  - name: notify_end
+    image: plugins/webhook
+    settings:
+      urls: https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=a7322de6-8ef5-47d0-ac0f-03df8443f5f8
+      content_type: application/json
+      template: |
+        {
+        	"msgtype": "markdown",
+        	"markdown": {
+        		"content": "**drone自动发布**\n[{{repo.owner}}/{{repo.name}} 任务编号#{{ build.number }}]({{ build.link }})\n
+                            >当前版本: {{build.tag}}
+                            >状态: {{#success build.status}}<font color=\"green\">发布成功</font> [点击查看版本信息](https://sdk-cfg.yingxiong.com/files/release/cnsrv/{{build.tag}}/version.html) {{else}}<font color=\"red\">发布失败</font>{{/success}}"
+        	}
+        }
+    when:
+      status:
+        - success
+        - failure
